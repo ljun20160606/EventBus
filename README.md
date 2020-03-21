@@ -1,7 +1,7 @@
-EventBus
+eventbus
 ======
 
-Package EventBus is the little and lightweight eventbus with async compatibility for GoLang.
+Package eventbus is the little and lightweight eventbus with async compatibility for GoLang.
 
 #### Example
 ```go
@@ -10,7 +10,7 @@ func calculator(a int, b int) {
 }
 
 func main() {
-	bus := EventBus.New();
+	bus := eventbus.New();
 	bus.Subscribe("main:calculator", calculator);
 	bus.Publish("main:calculator", 20, 40);
 	bus.Unsubscribe("main:calculator", calculator);
@@ -27,9 +27,9 @@ func main() {
 * **WaitAsync()**
 
 #### New()
-New returns new EventBus with empty handlers.
+New returns new eventbus with empty handlers.
 ```go
-bus := EventBus.New();
+bus := eventbus.New();
 ```
 
 #### Subscribe(topic string, fn interface{}) error
@@ -45,7 +45,7 @@ Subscribe to a topic once. Handler will be removed after executing. Returns erro
 ```go
 func HelloWorld() { ... }
 ...
-bus.Subscribe("topic:handler", EventBus.WithOnce())
+bus.Subscribe("topic:handler", HelloWorld, eventbus.WithOnce())
 ```
 
 #### Unsubscribe(topic string, fn interface{}) error
@@ -75,8 +75,8 @@ func slowCalculator(a, b int) {
 	fmt.Printf("%d\n", a + b)
 }
 
-bus := EventBus.New()
-bus.Subscribe("main:slow_calculator", slowCalculator, EventBus.WithAsync(), EventBus.WithTransactional())
+bus := eventbus.New()
+bus.Subscribe("main:slow_calculator", slowCalculator, eventbus.WithAsync(), eventbus.WithTransactional())
 
 bus.Publish("main:slow_calculator", 20, 60)
 
