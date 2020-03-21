@@ -53,7 +53,8 @@ type BusSubscriber interface {
 
 //BusPublisher defines publishing-related bus behavior
 type BusPublisher interface {
-	Publish(topic string, args ...interface{})
+	// Publish return error if any of subscribe func return values contains error
+	Publish(topic string, args ...interface{}) error
 }
 
 //BusController defines bus control behavior (checking handler's presence, synchronization)
@@ -191,7 +192,7 @@ func (bus *EventBus) Unsubscribe(topic string, handler interface{}, configurator
 }
 
 // Publish executes callback defined for a topic. Any additional argument will be transferred to the callback.
-func (bus *EventBus) Publish(topic string, args ...interface{}) {
+func (bus *EventBus) Publish(topic string, args ...interface{}) error {
 	bus.lock.Lock() // will unlock if handler is not found or always after setUpPublish
 	defer bus.lock.Unlock()
 	if handlers, ok := bus.handlers[topic]; ok && 0 < len(*handlers) {
@@ -201,7 +202,7 @@ func (bus *EventBus) Publish(topic string, args ...interface{}) {
 		copyHandlers = append(copyHandlers, *handlers...)
 		for {
 			if copyHandlers.Len() == 0 {
-				return
+				return nil
 			}
 			h := heap.Pop(&copyHandlers)
 			handler := h.(*eventHandler)
@@ -209,7 +210,9 @@ func (bus *EventBus) Publish(topic string, args ...interface{}) {
 				bus.removeHandler(topic, bus.findEventHandlerIdx(topic, handler))
 			}
 			if !handler.async {
-				bus.doPublish(handler, topic, args...)
+				if err := bus.doPublish(handler, topic, args...); err != nil {
+					return err
+				}
 			} else {
 				bus.wg.Add(1)
 				if handler.transactional {
@@ -219,11 +222,21 @@ func (bus *EventBus) Publish(topic string, args ...interface{}) {
 			}
 		}
 	}
+	return nil
 }
 
-func (bus *EventBus) doPublish(handler *eventHandler, topic string, args ...interface{}) {
+var errorInterface = reflect.TypeOf((*error)(nil)).Elem()
+
+func (bus *EventBus) doPublish(handler *eventHandler, topic string, args ...interface{}) error {
 	passedArguments := bus.setUpPublish(topic, args...)
-	handler.callBack.Call(passedArguments)
+	values := handler.callBack.Call(passedArguments)
+	for i := range values {
+		value := values[i]
+		if value.Type().Implements(errorInterface) {
+			return value.Interface().(error)
+		}
+	}
+	return nil
 }
 
 func (bus *EventBus) doPublishAsync(handler *eventHandler, topic string, args ...interface{}) {

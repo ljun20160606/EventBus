@@ -1,6 +1,7 @@
 package eventbus
 
 import (
+	"errors"
 	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
@@ -49,10 +50,10 @@ func TestSubscribeOnceAndManySubscribe(t *testing.T) {
 	ast.Nil(bus.Subscribe(event, fn))
 	ast.Nil(bus.Subscribe(event, fn))
 
-	bus.Publish(event)
+	ast.Nil(bus.Publish(event))
 	ast.Equal(3, flag)
 
-	bus.Publish(event)
+	ast.Nil(bus.Publish(event))
 	ast.Equal(5, flag)
 }
 
@@ -75,7 +76,7 @@ func TestPublish(t *testing.T) {
 			ast.Equal(a, b)
 		}),
 	)
-	bus.Publish("topic", 10, 10)
+	ast.Nil(bus.Publish("topic", 10, 10))
 }
 
 func TestSubcribeOnceAsync(t *testing.T) {
@@ -88,8 +89,8 @@ func TestSubcribeOnceAsync(t *testing.T) {
 		*out = append(*out, a)
 	}, WithOnce(), WithAsync()))
 
-	bus.Publish("topic", 10, &results)
-	bus.Publish("topic", 10, &results)
+	ast.Nil(bus.Publish("topic", 10, &results))
+	ast.Nil(bus.Publish("topic", 10, &results))
 
 	bus.WaitAsync()
 
@@ -110,8 +111,8 @@ func TestSubscribeAsyncTransactional(t *testing.T) {
 		*out = append(*out, a)
 	}, WithAsync(), WithTransactional()))
 
-	bus.Publish("topic", 1, &results, "1s")
-	bus.Publish("topic", 2, &results, "0s")
+	ast.Nil(bus.Publish("topic", 1, &results, "1s"))
+	ast.Nil(bus.Publish("topic", 2, &results, "0s"))
 
 	bus.WaitAsync()
 
@@ -131,13 +132,13 @@ func TestSubscribeAsync(t *testing.T) {
 		out <- a
 	}, WithAsync()))
 
-	bus.Publish("topic", 1, results)
-	bus.Publish("topic", 2, results)
+	ast.Nil(bus.Publish("topic", 1, results))
+	ast.Nil(bus.Publish("topic", 2, results))
 
 	numResults := 0
 
 	go func() {
-		for _ = range results {
+		for range results {
 			numResults++
 		}
 	}()
@@ -173,7 +174,38 @@ func TestSubscribeOrder(t *testing.T) {
 		}, WithOrder(1)),
 	)
 
-	bus.Publish("topic")
+	ast.Nil(bus.Publish("topic"))
 
 	ast.Equal([]int{3, 2, 1}, results)
+}
+
+func TestPublishReturnError(t *testing.T) {
+	ast := assert.New(t)
+
+	var flag int
+
+	bus := New()
+	ast.Nil(
+		bus.Subscribe("topic", func() {
+			flag += 1
+		}, WithOrder(3)),
+	)
+
+	err := errors.New("topic err")
+	ast.Nil(
+		bus.Subscribe("topic", func() (interface{}, error) {
+			return nil, err
+		}, WithOrder(2)),
+	)
+
+	ast.Nil(
+		bus.Subscribe("topic", func() {
+			flag += 2
+		}, WithOrder(1)),
+	)
+
+	// pub
+	ast.Equal(bus.Publish("topic"), err)
+	// interrupt by err
+	ast.Equal(1, flag)
 }
