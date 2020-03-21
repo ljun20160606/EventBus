@@ -232,6 +232,9 @@ func (bus *EventBus) doPublish(handler *eventHandler, topic string, args ...inte
 	values := handler.callBack.Call(passedArguments)
 	for i := range values {
 		value := values[i]
+		if value.IsNil() {
+			continue
+		}
 		if value.Type().Implements(errorInterface) {
 			return value.Interface().(error)
 		}
