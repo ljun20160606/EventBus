@@ -209,3 +209,22 @@ func TestPublishReturnError(t *testing.T) {
 	// interrupt by err
 	ast.Equal(1, flag)
 }
+
+var returnErr = func() error {
+	return nil
+}
+
+func BenchmarkEventBus_Publish(b *testing.B) {
+	for n := 0; n < b.N; n++ {
+		_ = returnErr()
+	}
+}
+
+func BenchmarkEventBus_Publish2(b *testing.B) {
+	bus := New()
+	_ = bus.Subscribe("returnErr", returnErr)
+
+	for n := 0; n < b.N; n++ {
+		_ = bus.Publish("returnErr")
+	}
+}
