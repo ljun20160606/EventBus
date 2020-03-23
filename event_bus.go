@@ -3,6 +3,7 @@ package eventbus
 import (
 	"container/heap"
 	"fmt"
+	"go.uber.org/atomic"
 	"reflect"
 	"sync"
 )
@@ -73,12 +74,14 @@ type Bus interface {
 // EventBus - box for handlers and callbacks.
 type EventBus struct {
 	handlers map[string]*eventHandlerQueue
-	lock     sync.Mutex // a lock for the map
+	lock     sync.RWMutex // a lock for the map
 	wg       sync.WaitGroup
 }
 
 type eventHandler struct {
-	callBack      reflect.Value
+	callBack reflect.Value
+	// mark once run
+	onceDone      atomic.Bool
 	flagOnce      bool
 	async         bool
 	transactional bool
@@ -137,7 +140,7 @@ func (l *eventHandlerQueue) Pop() interface{} {
 func New() Bus {
 	b := &EventBus{
 		handlers: make(map[string]*eventHandlerQueue),
-		lock:     sync.Mutex{},
+		lock:     sync.RWMutex{},
 		wg:       sync.WaitGroup{},
 	}
 	return Bus(b)
@@ -169,8 +172,6 @@ func (bus *EventBus) Subscribe(topic string, fn interface{}, configurators ...Ev
 
 // HasCallback returns true if exists any callback subscribed to the topic.
 func (bus *EventBus) HasCallback(topic string) bool {
-	bus.lock.Lock()
-	defer bus.lock.Unlock()
 	_, ok := bus.handlers[topic]
 	if ok {
 		return len(*bus.handlers[topic]) > 0
@@ -185,7 +186,7 @@ func (bus *EventBus) Unsubscribe(topic string, handler interface{}, configurator
 	defer bus.lock.Unlock()
 	if _, ok := bus.handlers[topic]; ok && len(*bus.handlers[topic]) > 0 {
 		e := newEventHandler(handler, configurators)
-		bus.removeHandler(topic, bus.findEventHandlerIdx(topic, e))
+		bus.removeHandler(topic, bus.findEventHandlerIdx(topic, e, false))
 		return nil
 	}
 	return fmt.Errorf("topic %s doesn't exist", topic)
@@ -193,21 +194,27 @@ func (bus *EventBus) Unsubscribe(topic string, handler interface{}, configurator
 
 // Publish executes callback defined for a topic. Any additional argument will be transferred to the callback.
 func (bus *EventBus) Publish(topic string, args ...interface{}) error {
-	bus.lock.Lock() // will unlock if handler is not found or always after setUpPublish
-	defer bus.lock.Unlock()
 	if handlers, ok := bus.handlers[topic]; ok && 0 < len(*handlers) {
 		// Handlers slice may be changed by removeHandler and Unsubscribe during iteration,
 		// so make a copy and iterate the copied slice.
-		copyHandlers := make(eventHandlerQueue, 0, len(*handlers))
-		copyHandlers = append(copyHandlers, *handlers...)
+		bus.lock.RLock()
+		copyHandlers := make(eventHandlerQueue, len(*handlers))
+		copy(copyHandlers, *handlers)
+		bus.lock.RUnlock()
+
+		var onceHandler []*eventHandler
 		for {
 			if copyHandlers.Len() == 0 {
-				return nil
+				break
 			}
 			h := heap.Pop(&copyHandlers)
 			handler := h.(*eventHandler)
 			if handler.flagOnce {
-				bus.removeHandler(topic, bus.findEventHandlerIdx(topic, handler))
+				if handler.onceDone.CAS(false, true) {
+					onceHandler = append(onceHandler, handler)
+				} else {
+					continue
+				}
 			}
 			if !handler.async {
 				if err := bus.doPublish(handler, topic, args...); err != nil {
@@ -220,6 +227,18 @@ func (bus *EventBus) Publish(topic string, args ...interface{}) error {
 				}
 				go bus.doPublishAsync(handler, topic, args...)
 			}
+		}
+
+		// clean onceHandler
+		if len(onceHandler) != 0 {
+			func() {
+				bus.lock.Lock()
+				defer bus.lock.Unlock()
+				for i := range onceHandler {
+					handler := onceHandler[i]
+					bus.removeHandler(topic, bus.findEventHandlerIdx(topic, handler, true))
+				}
+			}()
 		}
 	}
 	return nil
@@ -264,10 +283,17 @@ func (bus *EventBus) removeHandler(topic string, idx int) {
 	heap.Remove(queue, idx)
 }
 
-func (bus *EventBus) findEventHandlerIdx(topic string, eventHandler *eventHandler) int {
+func (bus *EventBus) findEventHandlerIdx(topic string, eventHandler *eventHandler, containsOnceDone bool) int {
 	if _, ok := bus.handlers[topic]; ok {
 		for idx, handler := range *bus.handlers[topic] {
 			if handler.Equal(eventHandler) {
+				// it's been run
+				if eventHandler.flagOnce && eventHandler.onceDone.Load() {
+					if containsOnceDone {
+						return idx
+					}
+					continue
+				}
 				return idx
 			}
 		}
